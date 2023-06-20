@@ -6,20 +6,22 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 /**
- * @title Low Risk Refund Bonus Escrow
+ * @title Refund Bonus Escrow
  * @author Armand Daigle
- * @notice Just a simple refund bonus intermediary
+ * @notice The dominant assurance logic of a crowdfunding campaign.
  */
 contract t0wnRefundBonus is Ownable, ReentrancyGuard {
-    bool public isCampaignExpired = false;
-    bool public isCampaignSuccessful = false;
-    uint32 public numEarlyPledgers;
     uint256 public totalRefundBonus;
     uint256 public earlyPledgerRefundBonus;
+    uint256 public campaignExpiryTime;
+    uint32 public numEarlyPledgers;
+    bool public isCampaignExpired = false;
+    bool public isCampaignSuccessful = false;
 
     mapping(address => bool) earlyPledgers;
     mapping(address => bool) hasBeenRefunded;
 
+    // Events mainly for transparency to other DAOs/pledgers.
     event RefundBonusDeposited(address, uint256);
     event CampaignHasClosed(bool, bool);
     event CampaignRefundWithdrawal(address, uint256);
@@ -49,38 +51,49 @@ contract t0wnRefundBonus is Ownable, ReentrancyGuard {
         emit RefundBonusDeposited(msg.sender, refundBonusAmount);
     }
 
-    // Ideal scenario is that JuiceboxDAO has an automated function that can call this
-    // function. If so, their address would be the only address that can call this.
-    // Otherwise, this would need to be periodically called by t0wn team.
-    // Function gets list of early plegers, campaign success, and campaign expiry
-    // from the JuiceboxDAO campaign.
-    function campaignResultRelay(
-        bool isExpired,
-        bool isSuccessful,
-        address payable[] memory _earlyPledgers
-    ) public {
-        require(
-            isCampaignExpired == false && isCampaignSuccessful == false,
-            "Campaign must either expire or be successful or both to call this function."
-        );
-        // If JuiceDAO calls this function, could make it so that it becomes locked
-        // after one call, as a form of security. But that would mean if it is not called
-        // correctly, then the refund bonus could forever be locked in this contract.
-        isCampaignExpired = isExpired;
-        isCampaignSuccessful = isSuccessful;
-        numEarlyPledgers = uint32(_earlyPledgers.length);
-        earlyPledgerRefundBonus = totalRefundBonus / numEarlyPledgers;
+    function setCampaignExpiryTime(uint256 id) external payable onlyOwner {
+        // TODO: import Juicebox's JBFundingCycleStore contract and call the currentOf()
+        // function which will return the start and duration times of the campaign funding
+        // cycle. Store those in variables here to be used by campaignResultRelay().
+        // ( ,,, uint256 start, uint256 duration, ,,,,) = JBFundingCycleStore.currentOf(id);
+        // campaignExpiryTime = start + duration;
+    }
 
-        uint32 i = 0;
-        for (; i < _earlyPledgers.length; i++) {
-            earlyPledgers[_earlyPledgers[i]] = true;
-        }
-        emit CampaignHasClosed(isCampaignExpired, isCampaignSuccessful);
+    /**
+     * @notice Project campaign "funding cycle" is created on JuiceboxDAO. Right after
+     * the funding cycle ends, this function retrieves the early pledger addresses and campaign
+     * results. Waiting on Juicebox devs to see if they have a retrievable public array or mapping.
+     * Also, anyone call this function to instill more confidence in pledgers.
+     * @dev We would have to establish a data source contract to hook into the Juicebox contract
+     * architecture to have a payer pay() function call this contract and store pay params like
+     * address, amount paid, and time.
+     */
+    function campaignResultRelay() public {
+        require(
+            block.timestamp >= campaignExpiryTime,
+            "Campaign has not expired yet."
+        );
+
+        // TODO: Add locking pattern so that this function can only be called once.
+
+        // TODO: get campaign success and early pledger addresses from Juicebox.
+        // isCampaignExpired = isExpired;
+        // isCampaignSuccessful = isSuccessful;
+        // numEarlyPledgers = uint32(_earlyPledgers.length);
+        // earlyPledgerRefundBonus = totalRefundBonus / numEarlyPledgers;
+
+        // uint32 i = 0;
+        // for (; i < _earlyPledgers.length; i++) {
+        //     earlyPledgers[_earlyPledgers[i]] = true;
+        // }
+        //emit CampaignHasClosed(isCampaignExpired, isCampaignSuccessful);
     }
 
     function withdrawRefundBonus() external payable nonReentrant {
-        require(isCampaignSuccessful == false, "Campaign succeeded.");
-        require(isCampaignExpired == true, "Campaign is still active.");
+        require(
+            isCampaignSuccessful == false && isCampaignExpired == true,
+            "Campaign must have expired and failed to call this function."
+        );
         require(
             hasBeenRefunded[msg.sender] == true,
             "Already withdrawn refund."
@@ -103,7 +116,7 @@ contract t0wnRefundBonus is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev This function is callable onyl after campaign expiry if goal is met.
+     * @dev This function is callable only after campaign expiry if goal is met.
      * @param _address Owner must call this function, but they can
      * input another address to receive funds if desired.
      */
@@ -111,8 +124,8 @@ contract t0wnRefundBonus is Ownable, ReentrancyGuard {
         address payable _address
     ) external payable onlyOwner {
         require(
-            isCampaignExpired == false && isCampaignSuccessful == false,
-            "Campaign must either expire or be successful or both to call this function."
+            isCampaignExpired == true && isCampaignSuccessful == true,
+            "Campaign must be expired and successful to call this function."
         );
 
         (bool success, ) = _address.call{value: address(this).balance}("");
